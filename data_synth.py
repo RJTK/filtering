@@ -14,7 +14,7 @@ from matplotlib import pyplot as plt
 
 from scipy import signal, stats
 
-from LSI_filters import iidG_ER, block_companion, matrix_ev_ax, \
+from LSI_filters import iidG_ER, iidG_gn, block_companion, matrix_ev_ax, \
   plot_matrix_ev
 
 #use data_iidG_ER(n, T, p, q, r, s2, file_name, show_ev = True)
@@ -59,62 +59,6 @@ def random_var(n, p, p_radius = 0.9, G_A = None):
         b, a = random_arma(p, 1, p_radius = p_radius)
         A[:, j, i] = -a[1:]
   return A
-
-#I think it's totally unnecessary to actually generate a literal graph
-#I am likely much better off generating random VARMA models...
-#----------GRAPH GENERATORS---------
-def gn_graph(n, kernel = None, seed = 0):
-  '''
-  Creates and returns a growing network grpah from networkx.  We return
-  it's adjacency matrix, which is stored as a sparse matrix.
-
-  Creating an ARMA model from this graph will infact lead to a stable
-  system (as long as each individual filter is stable) since we produce
-  a tree shaped graph.
-  '''
-  G = nx.gn_graph(n, kernel = kernel, seed = seed)
-  return G
-
-def gcgraph_gn(n, p, q, seed = 0):
-  '''
-  INCOMPLETE
-
-  This function creates a random growing network graph using
-  nx.gn_graph with n nodes and the given seed.  It then generates a
-  random ARMA(p, q) filter for each edge using the random_arma
-  function from util.py.  We then do a topological sort of the
-  graph and put unit variance white noise on the driver nodes.
-  Finally we associate with each edge the spectrum of a process.
-  
-  Of course there are a great many paramters we could modify with this
-  method.  This is just a first pass to see if I can get something to
-  work at all.
-  '''
-  #Generate a graph with a filter on each edge
-  G = nx.gn_graph(n, seed = seed)
-  for e in G.edges_iter():
-    H = random_arma(p, q)
-    G.add_edge(*e, filter_ba = H)
-
-  #Identify the driving nodes and a topological ordering
-  #We remove the driving nodes from the topological order
-  topo_order = nx.topological_sort(G)
-  driving_nodes = set()
-  for v in G.nodes_iter():
-    if len(G.predecessors(v)) == 0:
-      driving_nodes.add(v)
-  for i, v in enumerate(topo_order):
-    if v in driving_nodes:
-      del topo_order[i]
-
-  #Assign a spectrum to the driving nodes (use white noise)
-  w = np.linspace(0, np.pi, 1000) #The frequency points to use
-  P_white = np.ones_like(w)
-  
-  for v in driving_nodes:
-    G.add_node(v, PSD = P_white)
-
-  return G
 
 #---------DATA SYNTHESIZERS----------
 class VARpSS(object):
@@ -176,7 +120,7 @@ def numba_var(B, u):
   #assert u.shape == (n, T)
   B = np.dstack(B) #B[:,:,i] = B[i]
   
-  @numba.jit(nopython = True, cache = True)
+  @numba.jit(nopython = False, cache = True)
   def inner_loop(B, p, n, T, u):
     Y = np.empty((n, T + p + 1), dtype = np.float64) #Avoid the initialization
     Y[:, 0:p + 1] = 0 #only zero the backwards extension and time 0
@@ -252,6 +196,47 @@ def data_iidG_ER(n, T, p, q, r, s2, file_name = None,
 
   A = {'n': n, 'p': p, 'q': q, 'r': r, 'T': T + 1, 's2': s2,
        'G': G, 'B': np.hstack(B), 'D': Y}
+
+  if file_name:
+    f = open(file_name, 'wb')
+    P = pickle.Pickler(f, protocol = 2)
+    P.dump(A)
+    f.close()
+  if ret_data:
+    return A
+  return
+
+def data_iidG_gn(n, T, p, s2, gain_var = 1, p_radius = 0.9, k = None,
+                 file_name = None, plt_ex = False, ret_data = False):
+  '''
+  We generate an nxn iidG_gn system of order p with underlying
+  growing network graph with kernel k.  That is, we generate a random
+  n node VAR(p) model where filter weights are random_arma with
+  p_radius and gaussian gain having variance gain_var.  Then we
+  generate T data points from this model.  The model is always stable
+  as long as each underlying arma filter is stable because the graph
+  structure is an undirected tree.
+
+  n: Number of nodes
+  T: Number of time steps after 0
+  p: Lag time VAR(p)
+  gain_var: Variance for gaussian filter gain
+  s2: iid Gaussian noise driver variance
+  p_radius: The radius for poles in each arma filter
+  file_name: Name of file to save data to
+  '''
+  B, M, G = iidG_gn(n, p, gain_var = gain_var, k = k, p_radius = p_radius)
+  u = np.sqrt(s2)*np.random.normal(scale = 1, size = (n, T))
+  Y = numba_var(B, u)
+
+  if plt_ex:
+    plt.plot(Y.loc[:, 'x1'], label = 'Y.x1', linewidth = 2)
+    plt.plot(u[0, :], label = 'noise', linewidth = 2)
+    plt.legend()
+    plt.show()
+
+  A = {'n': n, 'p': p, 'T': T + 1, 's2': s2, 'G': G, 'B':
+       np.hstack(B), 'D': Y}
 
   if file_name:
     f = open(file_name, 'wb')

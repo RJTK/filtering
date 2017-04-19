@@ -1,4 +1,5 @@
 import numpy as np
+import networkx as nx
 import cmath
 
 from math import sqrt
@@ -50,6 +51,29 @@ def iidG_ER(n, p, q, r = 0.65):
   B = [k*random_matrix(n, dN)*G.T for i in range(p)]
   M = block_companion(B)
   return B, M, G
+
+def iidG_gn(n, p, gain_var = 1, k = None, p_radius = 0.75):
+  def aEij(i, j, a = 1):
+    Eij = np.zeros((n,n))
+    Eij[i, j] = a
+    return Eij
+
+  G = nx.gn_graph(n, kernel = k)
+  G = nx.adjacency_matrix(G)
+  G = G.toarray()
+  
+  B = [np.zeros((n,n)) for i in range(p)]
+  for i, row in enumerate(G.T):
+    for j, x in enumerate(row):
+      if x == 1:
+        b, a = random_arma(p, 0, k = np.random.normal(0, gain_var),
+                           p_radius = p_radius)
+        B[0] = B[0] + aEij(i, j, b)
+        B[1:] = [B_tau + aEij(i, j, a_tau) for (B_tau, a_tau) in zip(B, a[1:])]
+
+  M = block_companion(B)
+  return B, M, G
+
 #-------GENERATION UTILITIES---------
 
 def block_companion(B):
